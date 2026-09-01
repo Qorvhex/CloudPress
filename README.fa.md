@@ -7,11 +7,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![Cloudflare D1](https://img.shields.io/badge/Cloudflare-D1_SQL-F38020?style=flat-square&logo=sqlite&logoColor=white)](https://developers.cloudflare.com/d1/)
+[![کانال تلگرام](https://img.shields.io/badge/تلگرام-@Qorvhex__Channel-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/Qorvhex_Channel)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero_Runtime-brightgreen?style=flat-square)](#)
-[![Tests Passing](https://img.shields.io/badge/Tests-54%2F54_Passed-success?style=flat-square)](#)
 [![Language: Bilingual](https://img.shields.io/badge/i18n-فارسی%20%7C%20English-blueviolet?style=flat-square)](#)
 
-[**🇺🇸 Read Documentation in English**](README.md)
+[**🇺🇸 Read Documentation in English**](README.md) • [**📢 عضویت در کانال تلگرام**](https://t.me/Qorvhex_Channel)
 
 </div>
 
@@ -64,24 +64,68 @@
 
 ---
 
-## 🚀 راهنمای راه‌اندازی سریع
+## 🚀 روش‌های راه‌اندازی و استقرار
 
-### پیش‌نیازها
+شما می‌توانید کلادپرس را به دو روش کاملاً ساده راه‌اندازی کنید:
+- **[روش اول: از طریق داشبورد وب کلادفلر (۳ دقیقه - بدون نیاز به ترمینال و کدنویسی)](#-روش-اول-راه‌اندازی-سریع-با-داشبورد-وب-کلادفلر-پیشنهادی)** ⚡
+- **[روش دوم: از طریق خط فرمان و ابزار Wrangler (مخصوص توسعه‌دهندگان)](#-روش-دوم-توسعه-محلی-و-خط-فرمان-wrangler-cli)** 💻
+
+---
+
+### 🌐 روش اول: راه‌اندازی سریع با داشبورد وب کلادفلر (پیشنهادی)
+
+در این روش **هیچ نیازی به نصب Node.js، گیت یا دستورات ترمینال ندارید** و همه‌چیز ظرف ۳ دقیقه مستقیماً در مرورگر شما انجام می‌شود:
+
+#### گام ۱: ساخت دیتابیس D1 در کلادفلر
+1. وارد حساب کاربری خود در [داشبورد کلادفلر](https://dash.cloudflare.com/) شوید.
+2. از منوی سمت چپ به بخش **Storage & Databases** ➔ **D1 SQL Database** بروید.
+3. روی دکمه **Create** کلیک کنید ➔ نام پایگاه داده را `cloudpress_db` بگذارید ➔ دکمه **Create** را بزنید.
+
+#### گام ۲: ساخت Worker و کپی کد
+1. از منوی سمت چپ به بخش **Compute (Workers & Pages)** بروید ➔ روی **Create** کلیک کنید ➔ گزینه **Create Worker** را انتخاب کنید.
+2. یک نام برای سایت خود انتخاب کنید (مثلاً `my-blog` یا `cloudpress`) ➔ دکمه **Deploy** را بزنید.
+3. در صفحه بعد، دکمه **Edit code** را بزنید تا ویرایشگر آنلاین کلادفلر باز شود.
+4. کدهای پیش‌فرض داخل ادیتور را کاملاً پاک کنید.
+5. تمام محتوای فایل [`worker.js`](worker.js) را کپی کرده، در این صفحه Paste کنید و دکمه آبی‌رنگ **Deploy** در بالا سمت راست را بزنید.
+
+#### گام ۳: اتصال دیتابیس D1 و فعال‌سازی سازگاری Node.js (مهم)
+1. به صفحه اصلی ورکر خود در داشبورد کلادفلر برگردید و تب **Settings** را باز کنید.
+2. در منوی تنظیمات، به بخش **Bindings** (یا **D1 Database Bindings**) بروید ➔ دکمه **Add** را بزنید ➔ گزینه **D1 Database** را انتخاب کنید:
+   - **Variable name (نام متغیر)**: حتماً با حروف بزرگ بنویسید: `DB`
+   - **D1 database**: دیتابیس `cloudpress_db` را از لیست انتخاب کنید.
+   - دکمه **Save and deploy** را بزنید.
+3. در همان تب **Settings**، به بخش **Runtime** (یا **Compatibility Flags**) بروید:
+   - در قسمت **Compatibility flags**، مقدار `nodejs_compat` را اضافه کنید.
+   - دکمه **Save** را بزنید.
+
+#### گام ۴: ورود به سایت و استفاده! 🎉
+- **صفحه اصلی سایت**: آدرس `https://your-worker-name.<subdomain>.workers.dev` را باز کنید.
+- **ورود به مدیریت**: به مسیر `/admin` بروید.
+- **مشخصات ورود پیش‌فرض**:
+  - نام کاربری: `admin`
+  - رمز عبور: `admin123`
+  *(جداول دیتابیس و داده‌های اولیه به صورت کاملاً خودکار در اولین ورود ساخته می‌شوند)*
+
+---
+
+### 💻 روش دوم: توسعه محلی و خط فرمان (Wrangler CLI)
+
+#### پیش‌نیازها
 - نصب [Node.js](https://nodejs.org/) (نسخه ۱۸ به بالا)
 - حساب کاربری رایگان در [Cloudflare](https://dash.cloudflare.com/)
 
-### ۱. کلون کردن مخزن
+#### ۱. کلون کردن مخزن
 ```bash
 git clone https://github.com/your-username/cloudpress.git
 cd cloudpress
 ```
 
-### ۲. نصب ابزار Wrangler
+#### ۲. نصب ابزار Wrangler
 ```bash
 npm install
 ```
 
-### ۳. ورود به حساب کلادفلر و ایجاد دیتابیس D1
+#### ۳. ورود به حساب کلادفلر و ایجاد دیتابیس D1
 ورود به حساب کاربری:
 ```bash
 npx wrangler login
@@ -90,14 +134,14 @@ npx wrangler login
 ```bash
 npx wrangler d1 create cloudpress_db
 ```
-شناسه پایگاه داده (database_id) در خروجی ترمینال نمایش داده می‌شود:
+شناسه پایگاه داده (database_id) در خروجی نمایش داده می‌شود:
 ```text
 database_name = "cloudpress_db"
 database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-### ۴. تنظیم فایل `wrangler.toml`
-شناسه به دست آمده را در فایل `wrangler.toml` در بخش `database_id` جایگزین کنید:
+#### ۴. تنظیم فایل `wrangler.toml`
+شناسه به دست آمده را در فایل `wrangler.toml` در بخش `database_id` قرار دهید:
 ```toml
 [[d1_databases]]
 binding = "DB"
@@ -105,17 +149,14 @@ database_name = "cloudpress_db"
 database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-### ۵. اجرای سرور توسعه محلی
+#### ۵. اجرای سرور توسعه محلی
 ```bash
 npm run dev
 ```
-آدرس [http://localhost:8787](http://localhost:8787) را در مرورگر باز کنید.
+آدرس [http://localhost:8787](http://localhost:8787) را باز کنید:
 - **صفحه اصلی سایت**: `http://localhost:8787/`
 - **ورود به پنل مدیریت**: `http://localhost:8787/admin`
-- **اطلاعات کاربری پیش‌فرض**:
-  - نام کاربری: `admin`
-  - کلمه عبور: `admin123`
-  *(توصیه می‌شود در اولین ورود، کلمه عبور را در تب پروفایل مدیریت تغییر دهید)*
+- **اطلاعات پیش‌فرض**: `admin` / `admin123`
 
 ---
 
@@ -148,6 +189,14 @@ npm run test
 
 ---
 
+## 📢 جامعه کاربری و پشتیبانی
+
+جهت اطلاع از جدیدترین آپدیت‌ها، ترفندهای سرورلس و ارتباط مستقیم با توسعه‌دهنده:
+- 🚀 **کانال تلگرام**: [Qorvhex_Channel@](https://t.me/Qorvhex_Channel)
+
+---
+
 ## 📄 لایسنس
 
-این پروژه تحت مجوز متن‌باز [MIT License](LICENSE) منتشر شده است و برای مقاصد شخصی و تجاری کاملاً رایگان می‌باشد.
+این پروژه تحت مجوز متن‌باز [MIT License](LICENSE) توسط [Qorvhex](https://t.me/Qorvhex_Channel) توسعه داده شده و برای مقاصد شخصی و تجاری کاملاً رایگان می‌باشد.
+
