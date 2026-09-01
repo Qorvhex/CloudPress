@@ -1,0 +1,33 @@
+{
+  "name": "cloudpress",
+  "version": "1.0.0",
+  "description": "Ultra-fast, serverless, single-file CMS & publishing platform powered by Cloudflare Workers and D1 SQL Database.",
+  "type": "module",
+  "main": "worker.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "d1:init": "wrangler d1 execute cloudpress_db --file=schema.sql",
+    "test": "node test_comprehensive_final.mjs",
+    "test:editor": "node test_visual_editor.mjs"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "cloudflare-d1",
+    "serverless",
+    "cms",
+    "blog",
+    "publishing-platform",
+    "single-file",
+    "quill-editor",
+    "edge-computing",
+    "bilingual",
+    "persian",
+    "english"
+  ],
+  "author": "Alireza",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.100.0"
+  }
+}
