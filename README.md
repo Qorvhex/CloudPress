@@ -7,11 +7,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![Cloudflare D1](https://img.shields.io/badge/Cloudflare-D1_SQL-F38020?style=flat-square&logo=sqlite&logoColor=white)](https://developers.cloudflare.com/d1/)
+[![Telegram](https://img.shields.io/badge/Telegram-@Qorvhex__Channel-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/Qorvhex_Channel)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero_Runtime-brightgreen?style=flat-square)](#)
-[![Tests Passing](https://img.shields.io/badge/Tests-54%2F54_Passed-success?style=flat-square)](#)
 [![Language: Bilingual](https://img.shields.io/badge/i18n-English%20%7C%20فارسی-blueviolet?style=flat-square)](#)
 
-[**🇮🇷 مطالعه راهنما به زبان فارسی (Persian Documentation)**](README.fa.md)
+[**🇮🇷 مطالعه راهنما به زبان فارسی (Persian Documentation)**](README.fa.md) • [**📢 کانال تلگرام (Telegram Channel)**](https://t.me/Qorvhex_Channel)
 
 </div>
 
@@ -87,24 +87,68 @@ The entire application runs from a **single, self-contained worker file (`worker
 
 ---
 
-## 🚀 Quickstart Guide
+## 🚀 Deployment Guides
 
-### Prerequisites
+Choose the deployment method that fits you best:
+- **[Option A: Cloudflare Web Dashboard (3 Minutes, No Terminal / No Code)](#-option-a-cloudflare-web-dashboard-3-minutes-no-terminal)** ⚡
+- **[Option B: Developer CLI via Wrangler (Local Dev & Automated CI/CD)](#-option-b-developer-cli-wrangler--local-dev)** 💻
+
+---
+
+### 🌐 Option A: Cloudflare Web Dashboard (3 Minutes, No Terminal)
+
+You do **not** need Git, Node.js, or any command line tools installed. You can launch your entire CMS directly inside your web browser using the free Cloudflare dashboard:
+
+#### Step 1: Create a D1 Database
+1. Log into your [Cloudflare Dashboard](https://dash.cloudflare.com/).
+2. In the left navigation menu, go to **Storage & Databases** ➔ **D1 SQL Database**.
+3. Click **Create** ➔ Name your database `cloudpress_db` ➔ Click **Create**.
+
+#### Step 2: Create the Worker
+1. In the left sidebar, click **Compute (Workers & Pages)** ➔ Click **Create** ➔ **Create Worker**.
+2. Give your worker a name (e.g. `my-blog` or `cloudpress`) and click **Deploy**.
+3. On the confirmation screen, click **Edit code** to open Cloudflare's in-browser editor.
+4. Delete all existing sample code.
+5. Copy the entire content of [`worker.js`](worker.js), paste it into the editor, and click **Deploy** (top right).
+
+#### Step 3: Link D1 Database & Enable Node.js Compatibility (Crucial)
+1. Go back to your Worker's main page in the dashboard and click the **Settings** tab.
+2. Under **Bindings** (or **D1 Database Bindings**), click **Add** ➔ Select **D1 Database**:
+   - **Variable name**: `DB` *(Must be uppercase `DB`)*
+   - **D1 database**: Select `cloudpress_db`
+   - Click **Save and deploy**.
+3. Under the same **Settings** tab, scroll to **Runtime** (or **Compatibility Flags**):
+   - Under **Compatibility flags**, add: `nodejs_compat`
+   - Click **Save**.
+
+#### Step 4: Access Your New Site! 🎉
+- **Public Site**: Open `https://your-worker-name.<subdomain>.workers.dev`
+- **Admin Panel**: Go to `https://your-worker-name.<subdomain>.workers.dev/admin`
+- **Default Credentials**:
+  - **Username**: `admin`
+  - **Password**: `admin123`
+  *(The database schema and initial pages are created automatically on your first visit!)*
+
+---
+
+### 💻 Option B: Developer CLI (Wrangler & Local Dev)
+
+#### Prerequisites
 - [Node.js](https://nodejs.org/) (v18 or newer)
-- A [Cloudflare Account](https://dash.cloudflare.com/) (Free tier works completely!)
+- A [Cloudflare Account](https://dash.cloudflare.com/)
 
-### 1. Clone the Repository
+#### 1. Clone the Repository
 ```bash
 git clone https://github.com/your-username/cloudpress.git
 cd cloudpress
 ```
 
-### 2. Install Wrangler CLI
+#### 2. Install Wrangler CLI
 ```bash
 npm install
 ```
 
-### 3. Create your Cloudflare D1 Database
+#### 3. Create your Cloudflare D1 Database
 Login to your Cloudflare account via Wrangler:
 ```bash
 npx wrangler login
@@ -113,13 +157,13 @@ Create a new D1 database named `cloudpress_db`:
 ```bash
 npx wrangler d1 create cloudpress_db
 ```
-The command will print your database ID, for example:
+The command will output your database ID:
 ```text
 database_name = "cloudpress_db"
 database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-### 4. Configure `wrangler.toml`
+#### 4. Configure `wrangler.toml`
 Open `wrangler.toml` and paste your `database_id`:
 ```toml
 [[d1_databases]]
@@ -128,17 +172,14 @@ database_name = "cloudpress_db"
 database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-### 5. Run Locally
+#### 5. Run Locally
 ```bash
 npm run dev
 ```
 Open [http://localhost:8787](http://localhost:8787) in your browser.
 - **Frontend**: `http://localhost:8787/`
 - **Admin Panel**: `http://localhost:8787/admin`
-- **Default Credentials**:
-  - **Username**: `admin`
-  - **Password**: `admin123`
-  *(Be sure to change your password in the Admin Profile tab upon first login)*
+- **Default Credentials**: `admin` / `admin123`
 
 ---
 
@@ -187,6 +228,15 @@ Result:
 
 ---
 
+## 📢 Community & Support
+
+Join our official Telegram channel for updates, announcements, and support:
+- 🚀 **Telegram Channel**: [@Qorvhex_Channel](https://t.me/Qorvhex_Channel)
+
+---
+
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE) - free for personal and commercial use.
+This project is licensed under the [MIT License](LICENSE) - developed by [Qorvhex](https://t.me/Qorvhex_Channel).
+Free for personal and commercial use.
+
