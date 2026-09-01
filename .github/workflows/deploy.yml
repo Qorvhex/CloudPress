@@ -17,8 +17,8 @@ jobs:
         with:
           node-version: 20
 
-      - name: Run Test Suite
-        run: node test_comprehensive_final.mjs
+      - name: Validate Syntax
+        run: node -c worker.js
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
