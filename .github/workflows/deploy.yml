@@ -17,8 +17,10 @@ jobs:
         with:
           node-version: 20
 
-      - name: Validate Syntax
-        run: node -c worker.js
+      - name: Validate Syntax & Run Security Tests
+        run: |
+          node -c worker.js
+          npm test
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3

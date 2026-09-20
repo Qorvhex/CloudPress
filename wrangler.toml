@@ -10,6 +10,6 @@ database_name = "cloudpress_db"
 database_id = "YOUR_D1_DATABASE_ID_HERE"
 
 # Environment Variables & Secrets
-# Note: Use `npx wrangler secret put JWT_SECRET` for production security
+# Note: Set JWT_SECRET via `npx wrangler secret put JWT_SECRET` or in Cloudflare Dashboard Variables & Secrets
 [vars]
-DEFAULT_SECRET = "cloudpress-production-secure-key"
+

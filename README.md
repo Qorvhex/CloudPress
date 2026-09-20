@@ -121,13 +121,23 @@ You do **not** need Git, Node.js, or any command line tools installed. You can l
    - Under **Compatibility flags**, add: `nodejs_compat`
    - Click **Save**.
 
-#### Step 4: Access Your New Site! 🎉
+#### Step 4: Set Mandatory JWT Secret (Security Critical)
+1. Still under Worker **Settings**, click **Variables and Secrets**.
+2. Under **Secrets**, click **Add**:
+   - **Type**: Select `Secret` (encrypted)
+   - **Variable name**: `JWT_SECRET`
+   - **Value**: Enter a high-entropy secret string (e.g. generated via `openssl rand -base64 48`)
+3. Click **Deploy**.
+*(Note: CloudPress fails closed and will refuse to serve admin routes without `JWT_SECRET` set, preventing unauthorized takeover).*
+
+#### Step 5: Access Your New Site & Update Credentials 🎉
 - **Public Site**: Open `https://your-worker-name.<subdomain>.workers.dev`
 - **Admin Panel**: Go to `https://your-worker-name.<subdomain>.workers.dev/admin`
-- **Default Credentials**:
+- **Initial Credentials**:
   - **Username**: `admin`
   - **Password**: `admin123`
   *(The database schema and initial pages are created automatically on your first visit!)*
+  > ⚠️ **Mandatory Security Requirement**: Upon first login, CloudPress requires changing the default administrator password in your Profile section. Changing the password instantly revokes all existing active sessions.
 
 ---
 
@@ -143,7 +153,7 @@ git clone https://github.com/your-username/cloudpress.git
 cd cloudpress
 ```
 
-#### 2. Install Wrangler CLI
+#### 2. Install Dependencies
 ```bash
 npm install
 ```
@@ -163,7 +173,7 @@ database_name = "cloudpress_db"
 database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-#### 4. Configure `wrangler.toml`
+#### 4. Configure `wrangler.toml` & Local Secret
 Open `wrangler.toml` and paste your `database_id`:
 ```toml
 [[d1_databases]]
@@ -172,42 +182,50 @@ database_name = "cloudpress_db"
 database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
+For local testing, create a `.dev.vars` file in the project root:
+```env
+JWT_SECRET=your-secure-local-jwt-secret-key-at-least-32-chars
+```
+
 #### 5. Run Locally
 ```bash
 npm run dev
 ```
-Open [http://localhost:8787](http://localhost:8787) in your browser.
+Open [http://localhost:8787](http://localhost:8787) in your browser:
 - **Frontend**: `http://localhost:8787/`
 - **Admin Panel**: `http://localhost:8787/admin`
-- **Default Credentials**: `admin` / `admin123`
+- **Initial Credentials**: `admin` / `admin123` (prompted to change immediately)
 
 ---
 
 ## 🚢 Deploy to Production
 
-Deploy with one command directly to Cloudflare's global edge network:
-```bash
-npm run deploy
-```
-
-Set a secure production JWT secret key:
+1. Set your production JWT secret:
 ```bash
 npx wrangler secret put JWT_SECRET
+```
+2. Deploy with one command directly to Cloudflare's global edge network:
+```bash
+npm run deploy
 ```
 
 ---
 
 ## 🧪 Comprehensive Automated Testing
 
-CloudPress includes an extensive test suite verifying:
-- End-to-end routing (`/`, `/blog`, `/post/:slug`, `/page/:slug`, `/sitemap.xml`, `/rss.xml`)
-- Quill WYSIWYG rich text formatting and HTML output
-- D1 SQL schema migrations and automated backups
-- Full English and Persian bidirectional translation engine
+CloudPress includes an automated security and functional verification suite:
+- Cryptographic hash strength (PBKDF2 100,000 iterations & legacy migration)
+- Constant-time HMAC signature verification (`timingSafeEqual`)
+- Session revocation on password changes (`token_version`)
+- HTTP security response headers (`X-Frame-Options`, `nosniff`, `HSTS`)
+- Safe backup import allowlist filtering (persistent XSS prevention)
+- Comment payload limits & moderation defaults
+- Brute-force rate limiting and fail-closed secret checks
 
-To run the complete test suite:
+To run the complete automated test suite:
 ```bash
-npm run test
+npm test
+```
 ```
 Result:
 ```text

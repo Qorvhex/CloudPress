@@ -7,11 +7,25 @@
 
 export default {
     async fetch(request, env, ctx) {
-        return handleRequest(request, env, ctx);
+        return withSecurityHeaders(await handleRequest(request, env, ctx));
     }
 };
 
-const DEFAULT_SECRET = "cloudpress-edge-jwt-super-secret-key-2026";
+function withSecurityHeaders(response) {
+    if (!response) return response;
+    const h = new Headers(response.headers);
+    h.set('X-Content-Type-Options', 'nosniff');
+    h.set('X-Frame-Options', 'DENY');
+    h.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    h.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    const body = (response.status === 204 || response.status === 304) ? null : response.body;
+    return new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: h
+    });
+}
+
 
 // =========================================================================
 // 0. سیستم بومی‌سازی، زبان و چندزبانگی (i18n & Localization System)
@@ -222,7 +236,27 @@ function formatDate(dateStr, lang = 'fa') {
 async function handleRequest(request, env, ctx) {
     const url = new URL(request.url);
     const db = env && env.DB;
-    const jwtSecret = (env && env.JWT_SECRET) || DEFAULT_SECRET;
+    const jwtSecret = env && env.JWT_SECRET;
+
+    // مسدودسازی دسترسی به پنل مدیریت در صورت عدم پیکربندی JWT_SECRET (C-1 Fail Closed)
+    if (!jwtSecret && url.pathname.startsWith('/admin')) {
+        return new Response(
+            'Configuration error: JWT_SECRET is not set. Run `wrangler secret put JWT_SECRET`, ' +
+            'or add it under Settings → Variables and Secrets in Cloudflare Dashboard, before using the admin panel.',
+            { status: 503, headers: { 'content-type': 'text/plain;charset=UTF-8' } }
+        );
+    }
+
+    // بررسی CSRF برای درخواست‌های تغییر وضعیت پنل مدیریت (M-5)
+    if (url.pathname.startsWith('/admin/api/') && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(request.method)) {
+        const origin = request.headers.get('Origin');
+        if (origin && origin !== url.origin) {
+            return new Response(JSON.stringify({ error: "خطای امنیتی: عدم تطابق مبدا درخواست (CSRF Check Failed)." }), {
+                status: 403,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
+        }
+    }
 
     // ۱. مقداردهی اولیه و خودکار پایگاه‌داده در صورت اتصال D1
     if (db) {
@@ -259,6 +293,14 @@ async function handleRequest(request, env, ctx) {
         if (!authUser) {
             return new Response(JSON.stringify({ error: "عدم احراز هویت. لطفاً مجدداً وارد شوید." }), {
                 status: 401,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
+        }
+
+        // بررسی سطح دسترسی کاربر مدیر (I-3 Role Enforcement)
+        if (authUser.role !== 'admin') {
+            return new Response(JSON.stringify({ error: "عدم دسترسی کافی (دسترسی فقط برای مدیر کل مجاز است)." }), {
+                status: 403,
                 headers: { 'content-type': 'application/json;charset=UTF-8' }
             });
         }
@@ -365,10 +407,18 @@ async function initDatabase(db) {
             salt TEXT NOT NULL,
             display_name TEXT,
             role TEXT DEFAULT 'admin',
+            must_change_password INTEGER DEFAULT 0,
+            token_version INTEGER DEFAULT 1,
+            iterations INTEGER DEFAULT 100000,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `).run();
+
+    // به‌روزرسانی خودکار ستون‌های امنیتی برای پایگاه‌داده‌های موجود (Migrations)
+    try { await db.prepare("ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0").run(); } catch (_) {}
+    try { await db.prepare("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 1").run(); } catch (_) {}
+    try { await db.prepare("ALTER TABLE users ADD COLUMN iterations INTEGER DEFAULT 100000").run(); } catch (_) {}
 
     // ایجاد جدول برگه‌ها
     await db.prepare(`
@@ -442,7 +492,7 @@ async function initDatabase(db) {
         )
     `).run();
 
-    // ایجاد جدول دیدگاه‌ها
+    // ایجاد جدول دیدگاه‌ها (پیش‌فرض pending برای نظارت پیش از انتشار - M-4)
     await db.prepare(`
         CREATE TABLE IF NOT EXISTS comments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -450,9 +500,19 @@ async function initDatabase(db) {
             author_name TEXT NOT NULL,
             author_email TEXT,
             content TEXT NOT NULL,
-            status TEXT DEFAULT 'approved',
+            status TEXT DEFAULT 'pending',
             parent_id INTEGER DEFAULT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `).run();
+
+    // ایجاد جدول محافظت در برابر حملات جستجوی فراگیر / Brute-force لاگین (H-2)
+    await db.prepare(`
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            ip TEXT PRIMARY KEY,
+            attempts INTEGER DEFAULT 0,
+            locked_until INTEGER DEFAULT 0,
+            last_attempt INTEGER DEFAULT 0
         )
     `).run();
 
@@ -468,10 +528,10 @@ async function initDatabase(db) {
     const userCount = await db.prepare("SELECT COUNT(*) as count FROM users").first();
     if (userCount && userCount.count === 0) {
         const salt = generateSalt();
-        const hash = await hashPassword("admin123", salt);
+        const hash = await hashPassword("admin123", salt, 100000, false);
         await db.prepare(`
-            INSERT INTO users (username, email, password_hash, salt, display_name, role)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO users (username, email, password_hash, salt, display_name, role, must_change_password, token_version, iterations)
+            VALUES (?, ?, ?, ?, ?, ?, 1, 1, 100000)
         `).bind('admin', 'admin@cloudpress.edge', hash, salt, 'مدیر کلادپرس', 'admin').run();
     }
 
@@ -548,6 +608,7 @@ async function initDatabase(db) {
             ])],
             ['footer_text', 'طراحی و توسعه یافته با Cloudflare Workers & D1 • تمامی حقوق محفوظ است.'],
             ['site_language', 'fa'],
+            ['comments_auto_approve', 'false'],
             ['social_github', 'https://github.com'],
             ['social_twitter', 'https://twitter.com'],
             ['social_discord', 'https://discord.gg'],
@@ -569,11 +630,23 @@ function generateSalt() {
     return Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function hashPassword(password, salt) {
+function timingSafeEqual(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    if (a.length !== b.length) return false;
+    let mismatch = 0;
+    for (let i = 0; i < a.length; i++) {
+        mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    return mismatch === 0;
+}
+
+async function hashPassword(password, salt, iterations = 100000, isLegacy = false) {
     const enc = new TextEncoder();
+    // در نسخه قدیمی سالت به انتهای پسورد چسبانده می‌شد؛ در ساختار استاندارد جدید از پسورد خام استفاده می‌شود (H-4)
+    const keyBytes = isLegacy ? enc.encode(password + salt) : enc.encode(password);
     const keyMaterial = await crypto.subtle.importKey(
         'raw',
-        enc.encode(password + salt),
+        keyBytes,
         { name: 'PBKDF2' },
         false,
         ['deriveBits']
@@ -582,7 +655,7 @@ async function hashPassword(password, salt) {
         {
             name: 'PBKDF2',
             salt: enc.encode(salt),
-            iterations: 10000,
+            iterations: iterations,
             hash: 'SHA-256'
         },
         keyMaterial,
@@ -611,7 +684,7 @@ async function signToken(payload, secret) {
 
 async function verifyToken(token, secret) {
     try {
-        if (!token) return null;
+        if (!token || !secret) return null;
         const parts = token.split('.');
         if (parts.length !== 3) return null;
         const [header, body, signature] = parts;
@@ -628,7 +701,8 @@ async function verifyToken(token, secret) {
         const signatureBuffer = await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(data));
         const expectedSignature = Array.from(new Uint8Array(signatureBuffer), b => b.toString(16).padStart(2, '0')).join('');
 
-        if (signature !== expectedSignature) return null;
+        // مقایسه در زمان ثابت جهت جلوگیری از حملات زمان‌بندی (I-1)
+        if (!timingSafeEqual(signature, expectedSignature)) return null;
 
         const decodedBody = decodeURIComponent(escape(atob(body)));
         const payload = JSON.parse(decodedBody);
@@ -655,6 +729,7 @@ function getCookie(request, name) {
 }
 
 async function getAuthUser(request, jwtSecret, db) {
+    if (!jwtSecret) return null;
     const token = getCookie(request, 'cp_session');
     if (!token) return null;
     const payload = await verifyToken(token, jwtSecret);
@@ -662,9 +737,22 @@ async function getAuthUser(request, jwtSecret, db) {
 
     if (db) {
         try {
-            const user = await db.prepare("SELECT id, username, email, display_name, role FROM users WHERE id = ?").bind(payload.userId).first();
-            return user || null;
+            const user = await db.prepare(
+                "SELECT id, username, email, display_name, role, token_version, must_change_password, iterations FROM users WHERE id = ?"
+            ).bind(payload.userId).first();
+
+            if (!user) return null;
+
+            // بررسی ابطال نشست و نسخه توکن برای خروج آنی نشست‌های پیشین پس از تغییر رمز (H-3)
+            const tokenTv = payload.tv !== undefined ? payload.tv : 0;
+            const userTv = user.token_version !== undefined ? user.token_version : 0;
+            if (tokenTv !== userTv) {
+                return null;
+            }
+
+            return user;
         } catch (e) {
+            console.error("getAuthUser database error:", e);
             return null;
         }
     }
@@ -673,23 +761,100 @@ async function getAuthUser(request, jwtSecret, db) {
 
 async function handleAuthLogin(request, db, jwtSecret) {
     if (!db) {
-        return new Response(JSON.stringify({ error: "پایگاه داده متصل نیست." }), { status: 500 });
+        return new Response(JSON.stringify({ error: "پایگاه داده متصل نیست." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
+    }
+
+    const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || '127.0.0.1';
+    const now = Math.floor(Date.now() / 1000);
+
+    // بررسی و مسدودسازی حملات Brute-Force (H-2)
+    try {
+        const attemptRecord = await db.prepare("SELECT attempts, locked_until FROM login_attempts WHERE ip = ?").bind(clientIp).first();
+        if (attemptRecord && attemptRecord.locked_until > now) {
+            const waitMinutes = Math.ceil((attemptRecord.locked_until - now) / 60);
+            return new Response(JSON.stringify({
+                error: `تعداد تلاش‌های ناموفق بیش از حد مجاز است. لطفاً ${waitMinutes} دقیقه دیگر مجدداً تلاش نمایید.`
+            }), {
+                status: 429,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
+        }
+    } catch (e) {
+        console.error("Lockout check error:", e);
     }
 
     try {
         const { username, password } = await request.json();
         if (!username || !password) {
-            return new Response(JSON.stringify({ error: "نام کاربری و کلمه عبور الزامی است." }), { status: 400 });
+            return new Response(JSON.stringify({ error: "نام کاربری و کلمه عبور الزامی است." }), {
+                status: 400,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
         }
 
         const user = await db.prepare("SELECT * FROM users WHERE username = ? OR email = ?").bind(username.trim(), username.trim()).first();
-        if (!user) {
-            return new Response(JSON.stringify({ error: "نام کاربری یا کلمه عبور نادرست است." }), { status: 401 });
+        
+        let isValid = false;
+        let needsUpgrade = false;
+
+        if (user) {
+            const userIterations = user.iterations || 10000;
+            const modernHash = await hashPassword(password, user.salt, userIterations, false);
+            if (timingSafeEqual(modernHash, user.password_hash)) {
+                isValid = true;
+                if (userIterations < 100000) needsUpgrade = true;
+            } else {
+                // سازگاری با هش‌های نسخه پیشین (Legacy Hash با salt چسبیده)
+                const legacyHash = await hashPassword(password, user.salt, userIterations, true);
+                if (timingSafeEqual(legacyHash, user.password_hash)) {
+                    isValid = true;
+                    needsUpgrade = true;
+                }
+            }
         }
 
-        const calculatedHash = await hashPassword(password, user.salt);
-        if (calculatedHash !== user.password_hash) {
-            return new Response(JSON.stringify({ error: "نام کاربری یا کلمه عبور نادرست است." }), { status: 401 });
+        if (!user || !isValid) {
+            // ثبت تلاش ناموفق در دیتابیس و قفل کردن موقت در صورت رسیدن به ۵ تلاش
+            try {
+                await db.prepare(`
+                    INSERT INTO login_attempts (ip, attempts, locked_until, last_attempt)
+                    VALUES (?, 1, 0, ?)
+                    ON CONFLICT(ip) DO UPDATE SET
+                        attempts = attempts + 1,
+                        locked_until = CASE WHEN attempts + 1 >= 5 THEN ? + 900 ELSE 0 END,
+                        last_attempt = ?
+                `).bind(clientIp, now, now, now).run();
+            } catch (err) {
+                console.error("Failed attempt recording error:", err);
+            }
+
+            return new Response(JSON.stringify({ error: "نام کاربری یا کلمه عبور نادرست است." }), {
+                status: 401,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
+        }
+
+        // پاکسازی شمارنده تلاش‌های ناموفق در صورت ورود صحیح
+        try {
+            await db.prepare("DELETE FROM login_attempts WHERE ip = ?").bind(clientIp).run();
+        } catch (_) {}
+
+        // ارتقای خودکار هش پسورد به ۱۰۰٬۰۰۰ تکرار استاندارد در پس‌زمینه در صورت لزوم (H-4)
+        if (needsUpgrade) {
+            try {
+                const newSalt = generateSalt();
+                const newHash = await hashPassword(password, newSalt, 100000, false);
+                await db.prepare("UPDATE users SET password_hash = ?, salt = ?, iterations = 100000 WHERE id = ?")
+                    .bind(newHash, newSalt, user.id).run();
+                user.password_hash = newHash;
+                user.salt = newSalt;
+                user.iterations = 100000;
+            } catch (upgradeErr) {
+                console.error("Password hash upgrade error:", upgradeErr);
+            }
         }
 
         const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
@@ -698,6 +863,7 @@ async function handleAuthLogin(request, db, jwtSecret) {
             username: user.username,
             role: user.role,
             display_name: user.display_name,
+            tv: user.token_version || 1,
             exp
         }, jwtSecret);
 
@@ -705,7 +871,13 @@ async function handleAuthLogin(request, db, jwtSecret) {
 
         return new Response(JSON.stringify({
             success: true,
-            user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role }
+            user: {
+                id: user.id,
+                username: user.username,
+                display_name: user.display_name,
+                role: user.role,
+                must_change_password: !!user.must_change_password
+            }
         }), {
             headers: {
                 'content-type': 'application/json;charset=UTF-8',
@@ -713,7 +885,11 @@ async function handleAuthLogin(request, db, jwtSecret) {
             }
         });
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleAuthLogin exception:", e);
+        return new Response(JSON.stringify({ error: "خطایی در فرآیند ورود رخ داد. لطفاً مجدداً تلاش کنید." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -733,12 +909,17 @@ async function handleUpdateProfile(request, db, authUser, jwtSecret) {
 
         let query = "UPDATE users SET display_name = ?, email = ?, updated_at = CURRENT_TIMESTAMP";
         const params = [display_name || authUser.display_name, email || authUser.email];
+        let passwordChanged = false;
+        let nextTv = (authUser.token_version || 1);
 
         if (password && password.trim().length >= 6) {
+            passwordChanged = true;
+            nextTv = nextTv + 1;
             const salt = generateSalt();
-            const hash = await hashPassword(password.trim(), salt);
-            query += ", password_hash = ?, salt = ?";
-            params.push(hash, salt);
+            const hash = await hashPassword(password.trim(), salt, 100000, false);
+            // با تغییر رمز: افزایش token_version (ابطال تمام سشن‌های دیگر)، صفر کردن must_change_password و ارتقای تکرار هش (H-1, H-3, H-4)
+            query += ", password_hash = ?, salt = ?, iterations = 100000, token_version = ?, must_change_password = 0";
+            params.push(hash, salt, nextTv);
         }
 
         query += " WHERE id = ?";
@@ -746,11 +927,31 @@ async function handleUpdateProfile(request, db, authUser, jwtSecret) {
 
         await db.prepare(query).bind(...params).run();
 
+        const headers = { 'content-type': 'application/json;charset=UTF-8' };
+
+        // صدور کوکی سشن جدید برای کاربر جاری با token_version جدید جهت حفظ لاگین او در حین خروج بقیه دستگاه‌ها
+        if (passwordChanged && jwtSecret) {
+            const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
+            const token = await signToken({
+                userId: authUser.id,
+                username: authUser.username,
+                role: authUser.role,
+                display_name: display_name || authUser.display_name,
+                tv: nextTv,
+                exp
+            }, jwtSecret);
+            headers['Set-Cookie'] = `cp_session=${token}; Path=/; Max-Age=604800; HttpOnly; SameSite=Lax; Secure`;
+        }
+
         return new Response(JSON.stringify({ success: true, message: "پروفایل با موفقیت به‌روزرسانی شد." }), {
-            headers: { 'content-type': 'application/json;charset=UTF-8' }
+            headers
         });
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleUpdateProfile exception:", e);
+        return new Response(JSON.stringify({ error: "خطا در به‌روزرسانی اطلاعات پروفایل." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -783,7 +984,11 @@ async function handleStatsAPI(db) {
             headers: { 'content-type': 'application/json;charset=UTF-8' }
         });
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleStatsAPI error:", e);
+        return new Response(JSON.stringify({ error: "خطایی در دریافت آمار رخ داد." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -906,7 +1111,11 @@ async function handlePostsAPI(request, db, authUser) {
             return new Response(JSON.stringify({ success: true }), { headers: { 'content-type': 'application/json;charset=UTF-8' } });
         }
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handlePostsAPI error:", e);
+        return new Response(JSON.stringify({ error: "خطایی در پردازش اطلاعات مقالات رخ داد." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -957,7 +1166,11 @@ async function handlePagesAPI(request, db) {
             return new Response(JSON.stringify({ success: true }), { headers: { 'content-type': 'application/json;charset=UTF-8' } });
         }
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handlePagesAPI error:", e);
+        return new Response(JSON.stringify({ error: "خطایی در پردازش اطلاعات برگه‌ها رخ داد." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -991,7 +1204,11 @@ async function handleCategoriesAPI(request, db) {
             return new Response(JSON.stringify({ success: true }), { headers: { 'content-type': 'application/json;charset=UTF-8' } });
         }
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleCategoriesAPI error:", e);
+        return new Response(JSON.stringify({ error: "خطایی در پردازش دسته‌بندی‌ها رخ داد." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -1019,7 +1236,11 @@ async function handleTagsAPI(request, db) {
             return new Response(JSON.stringify({ success: true }), { headers: { 'content-type': 'application/json;charset=UTF-8' } });
         }
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleTagsAPI error:", e);
+        return new Response(JSON.stringify({ error: "خطایی در پردازش برچسب‌ها رخ داد." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -1057,7 +1278,11 @@ async function handleMediaAPI(request, db) {
             return new Response(JSON.stringify({ success: true }), { headers: { 'content-type': 'application/json;charset=UTF-8' } });
         }
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleMediaAPI error:", e);
+        return new Response(JSON.stringify({ error: "خطایی در پردازش تصاویر رسانه رخ داد." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -1092,7 +1317,11 @@ async function handleCommentsAdminAPI(request, db) {
             return new Response(JSON.stringify({ success: true }), { headers: { 'content-type': 'application/json;charset=UTF-8' } });
         }
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleCommentsAdminAPI error:", e);
+        return new Response(JSON.stringify({ error: "خطایی در مدیریت دیدگاه‌ها رخ داد." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -1122,7 +1351,11 @@ async function handleSettingsAPI(request, db) {
             return new Response(JSON.stringify({ success: true }), { headers: { 'content-type': 'application/json;charset=UTF-8' } });
         }
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleSettingsAPI error:", e);
+        return new Response(JSON.stringify({ error: "خطایی در ذخیره تنظیمات رخ داد." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -1159,66 +1392,95 @@ async function handleBackupExport(db) {
             }
         });
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleBackupExport error:", e);
+        return new Response(JSON.stringify({ error: "خطایی در تهیه نسخه پشتیبان رخ داد." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
+
+const ALLOWED_SETTINGS_IMPORT = new Set([
+    'site_title', 'site_tagline', 'site_description', 'site_logo', 'site_favicon',
+    'brand_color', 'font_family', 'header_menu', 'footer_text', 'site_language',
+    'posts_per_page', 'comments_auto_approve', 'social_github', 'social_twitter',
+    'social_discord', 'social_telegram'
+]);
 
 async function handleBackupImport(request, db) {
     try {
         const payload = await request.json();
         const data = payload.data || payload;
 
-        if (!data || (!data.posts && !data.pages && !data.settings)) {
-            return new Response(JSON.stringify({ error: "فرمت فایل پشتیبان نامعتبر است." }), { status: 400 });
+        if (!data || (!data.posts && !data.pages && !data.settings && !data.categories)) {
+            return new Response(JSON.stringify({ error: "فرمت فایل پشتیبان نامعتبر است." }), {
+                status: 400,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
         }
 
-        // بازیابی دسته‌بندی‌ها
+        // ۱. بازیابی دسته‌بندی‌ها (عدم تخریب و ثبت بدون بازنویسی مخرب)
         if (Array.isArray(data.categories)) {
             for (const c of data.categories) {
-                await db.prepare("INSERT OR REPLACE INTO categories (id, name, slug, description) VALUES (?, ?, ?, ?)")
-                    .bind(c.id, c.name, c.slug, c.description || '').run();
+                if (!c.name || !c.slug) continue;
+                const existing = await db.prepare("SELECT id FROM categories WHERE slug = ?").bind(c.slug).first();
+                if (!existing) {
+                    await db.prepare("INSERT INTO categories (name, slug, description) VALUES (?, ?, ?)")
+                        .bind(c.name, c.slug, c.description || '').run();
+                }
             }
         }
 
-        // بازیابی مقالات
+        // ۲. بازیابی مقالات (تولید slug یکتا و شناسه مجزا جهت ممانعت از بازنویسی مقالات موجود با آیدی دلخواه - M-1)
         if (Array.isArray(data.posts)) {
             for (const p of data.posts) {
+                if (!p.title || !p.content) continue;
+                const safeSlug = await getUniquePostSlug(db, p.slug || slugify(p.title));
                 await db.prepare(`
-                    INSERT OR REPLACE INTO posts (id, title, slug, excerpt, content, cover_image, category_id, status, views_count, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO posts (title, slug, excerpt, content, cover_image, category_id, status, views_count, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).bind(
-                    p.id, p.title, p.slug, p.excerpt || '', p.content || '', p.cover_image || '',
+                    p.title, safeSlug, p.excerpt || '', p.content || '', p.cover_image || '',
                     p.category_id || null, p.status || 'published', p.views_count || 0,
                     p.created_at || new Date().toISOString(), p.updated_at || new Date().toISOString()
                 ).run();
             }
         }
 
-        // بازیابی برگه‌ها
+        // ۳. بازیابی برگه‌ها (ایجاد slug یکتا بدون بازنویسی)
         if (Array.isArray(data.pages)) {
             for (const pg of data.pages) {
+                if (!pg.title || !pg.content) continue;
+                const safeSlug = await getUniquePageSlug(db, pg.slug || slugify(pg.title));
                 await db.prepare(`
-                    INSERT OR REPLACE INTO pages (id, title, slug, content, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO pages (title, slug, content, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 `).bind(
-                    pg.id, pg.title, pg.slug, pg.content || '', pg.status || 'published',
+                    pg.title, safeSlug, pg.content || '', pg.status || 'published',
                     pg.created_at || new Date().toISOString(), pg.updated_at || new Date().toISOString()
                 ).run();
             }
         }
 
-        // بازیابی تنظیمات
+        // ۴. بازیابی ایمن تنظیمات: فقط فیلدهای مجاز. حذف کدهای اجرایی custom_header_code و custom_css (M-1)
         if (Array.isArray(data.settings)) {
             for (const s of data.settings) {
-                await db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").bind(s.key, s.value).run();
+                if (s && s.key && ALLOWED_SETTINGS_IMPORT.has(s.key)) {
+                    await db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?")
+                        .bind(s.key, String(s.value), String(s.value)).run();
+                }
             }
         }
 
-        return new Response(JSON.stringify({ success: true, message: "اطلاعات با موفقیت بازیابی شد." }), {
+        return new Response(JSON.stringify({ success: true, message: "اطلاعات مجاز با موفقیت و امنیت بازیابی شد." }), {
             headers: { 'content-type': 'application/json;charset=UTF-8' }
         });
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handleBackupImport exception:", e);
+        return new Response(JSON.stringify({ error: "خطا در پردازش و بازیابی فایل پشتیبان." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -1226,37 +1488,92 @@ async function handleBackupImport(request, db) {
 // 5. API عمومی ثبت دیدگاه (Public Comment Submission)
 // =========================================================================
 async function handlePublicCommentSubmit(request, db) {
-    if (!db) return new Response(JSON.stringify({ error: "Database offline" }), { status: 500 });
+    if (!db) return new Response(JSON.stringify({ error: "Database offline" }), {
+        status: 500,
+        headers: { 'content-type': 'application/json;charset=UTF-8' }
+    });
 
     try {
         const body = await request.json();
         const { post_id, author_name, author_email, content, honeypot } = body;
 
+        // مهار ربات‌ها با فیلد تله عسلی (Honeypot)
         if (honeypot) {
-            return new Response(JSON.stringify({ success: true }), { headers: { 'content-type': 'application/json' } });
+            return new Response(JSON.stringify({ success: true }), {
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
         }
 
         if (!post_id || !author_name || !content) {
-            return new Response(JSON.stringify({ error: "لطفاً نام و متن نظر خود را وارد کنید." }), { status: 400 });
+            return new Response(JSON.stringify({ error: "لطفاً نام و متن نظر خود را وارد کنید." }), {
+                status: 400,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
         }
 
+        const trimmedContent = content.trim();
+        const trimmedName = author_name.trim();
+        const trimmedEmail = (author_email || '').trim();
+
+        // محدودیت طول ورودی‌ها جهت جلوگیری از سرریز دیتابیس (M-4)
+        if (trimmedContent.length === 0 || trimmedContent.length > 2000) {
+            return new Response(JSON.stringify({ error: "طول متن دیدگاه باید بین ۱ تا ۲۰۰۰ کاراکتر باشد." }), {
+                status: 400,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
+        }
+        if (trimmedName.length === 0 || trimmedName.length > 100) {
+            return new Response(JSON.stringify({ error: "نام نمی‌تواند بیشتر از ۱۰۰ کاراکتر باشد." }), {
+                status: 400,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
+        }
+        if (trimmedEmail.length > 150) {
+            return new Response(JSON.stringify({ error: "طول آدرس ایمیل نامعتبر است." }), {
+                status: 400,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
+        }
+
+        // اعتبارسنجی وجود مقاله معتبر و منتشرشده (M-4)
+        const postIdNum = parseInt(post_id, 10);
+        if (isNaN(postIdNum)) {
+            return new Response(JSON.stringify({ error: "شناسه نوشته نامعتبر است." }), {
+                status: 400,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
+        }
+
+        const post = await db.prepare("SELECT id FROM posts WHERE id = ? AND status = 'published'").bind(postIdNum).first();
+        if (!post) {
+            return new Response(JSON.stringify({ error: "مقاله مورد نظر یافت نشد یا در وضعیت انتشار نیست." }), {
+                status: 404,
+                headers: { 'content-type': 'application/json;charset=UTF-8' }
+            });
+        }
+
+        // پیش‌فرض عدم انتشار خودکار و نیاز به تأیید ناظر (M-4)
         const modSetting = await db.prepare("SELECT value FROM settings WHERE key = 'comments_auto_approve'").first();
-        const autoApprove = !modSetting || modSetting.value !== 'false';
+        const autoApprove = !!(modSetting && (modSetting.value === 'true' || modSetting.value === '1'));
         const commentStatus = autoApprove ? 'approved' : 'pending';
         const userMsg = autoApprove 
             ? "دیدگاه شما با موفقیت ثبت شد." 
-            : "دیدگاه شما با موفقیت ثبت شد و پس از تایید مدیر نمایش داده خواهد شد.";
+            : "دیدگاه شما با موفقیت ثبت شد و پس از بررسی مدیر نمایش داده خواهد شد.";
 
         await db.prepare(`
             INSERT INTO comments (post_id, author_name, author_email, content, status)
             VALUES (?, ?, ?, ?, ?)
-        `).bind(parseInt(post_id), author_name.trim(), (author_email || '').trim(), content.trim(), commentStatus).run();
+        `).bind(postIdNum, trimmedName, trimmedEmail, trimmedContent, commentStatus).run();
 
         return new Response(JSON.stringify({ success: true, message: userMsg, autoApprove }), {
             headers: { 'content-type': 'application/json;charset=UTF-8' }
         });
     } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        console.error("handlePublicCommentSubmit exception:", e);
+        return new Response(JSON.stringify({ error: "خطایی در ثبت دیدگاه رخ داد. لطفاً مجدداً تلاش کنید." }), {
+            status: 500,
+            headers: { 'content-type': 'application/json;charset=UTF-8' }
+        });
     }
 }
 
@@ -2661,6 +2978,23 @@ function getAdminHTML(authUser) {
 
       <!-- Dynamic Tab Views Container -->
       <main class="p-6 md:p-8 max-w-7xl w-full mx-auto space-y-8 flex-1">
+        ${authUser.must_change_password ? `
+        <!-- هشدار امنیتی اجباری بودن تغییر کلمه عبور پیش‌فرض (H-1) -->
+        <div id="must-change-password-banner" class="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-amber-200">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+              <i data-lucide="shield-alert" class="w-6 h-6"></i>
+            </div>
+            <div>
+              <div class="text-sm font-bold text-amber-300">هشدار امنیتی بسیار مهم: کلمه عبور پیش‌فرض فعال است!</div>
+              <div class="text-xs text-amber-200/80">شما با کلمه عبور پیش‌فرض (admin123) وارد شده‌اید. برای امنیت وب‌سایت، سریعاً کلمه عبور اختصاصی خود را در بخش پروفایل تغییر دهید.</div>
+            </div>
+          </div>
+          <button onclick="switchTab('profile')" class="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl transition shrink-0 shadow-lg shadow-amber-500/20 flex items-center gap-2">
+            <i data-lucide="key" class="w-4 h-4"></i>
+            تغییر کلمه عبور
+          </button>
+        </div>` : ''}
 
         <!-- ================= TAB 1: DASHBOARD ================= -->
         <section id="view-dashboard" class="tab-view space-y-8">
@@ -5499,7 +5833,11 @@ function getAdminHTML(authUser) {
 
     // Initial Loading
     applyAdminLanguage(ADMIN_LANG);
-    loadStats();
+    if (${authUser.must_change_password ? 'true' : 'false'}) {
+      switchTab('profile');
+    } else {
+      loadStats();
+    }
     loadCategories();
     loadPages();
     loadMedia();

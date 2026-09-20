@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
     salt TEXT NOT NULL,
     display_name TEXT,
     role TEXT DEFAULT 'admin',
+    must_change_password INTEGER DEFAULT 0,
+    token_version INTEGER DEFAULT 1,
+    iterations INTEGER DEFAULT 100000,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -78,7 +81,7 @@ CREATE TABLE IF NOT EXISTS comments (
     author_name TEXT NOT NULL,
     author_email TEXT,
     content TEXT NOT NULL,
-    status TEXT DEFAULT 'approved',
+    status TEXT DEFAULT 'pending',
     parent_id INTEGER DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
@@ -89,9 +92,18 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS login_attempts (
+    ip TEXT PRIMARY KEY,
+    attempts INTEGER DEFAULT 0,
+    locked_until INTEGER DEFAULT 0,
+    last_attempt INTEGER DEFAULT 0
+);
+
 -- Indices for high performance queries on Cloudflare Edge
 CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug);
 CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
 CREATE INDEX IF NOT EXISTS idx_pages_slug ON pages(slug);
 CREATE INDEX IF NOT EXISTS idx_categories_slug ON categories(slug);
 CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_locked ON login_attempts(locked_until);
+
