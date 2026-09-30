@@ -11,7 +11,7 @@
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero_Runtime-brightgreen?style=flat-square)](#)
 [![Language: Bilingual](https://img.shields.io/badge/i18n-English%20%7C%20فارسی-blueviolet?style=flat-square)](#)
 
-[**🇮🇷 مطالعه راهنما به زبان فارسی (Persian Documentation)**](README.fa.md) • [**📢 کانال تلگرام (Telegram Channel)**](https://t.me/Qorvhex_Channel)
+[** مطالعه راهنما به زبان فارسی (Persian Documentation)**](README.fa.md) • [**📢 کانال تلگرام (Telegram Channel)**](https://t.me/Qorvhex_Channel)
 
 </div>
 
